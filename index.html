@@ -195,7 +195,7 @@ let state = {
   variant:null, variantType:null, weightDirection:null,
   price:null, pushbackReason:null, outcome:null,
   contactShared:null, contactName:'', contactPhone:'',
-  logCards:[], logDetail:null, logEditName:'', logEditPhone:''
+  logCards:[], logDetail:null, logEditName:'', logEditPhone:'', logEditHistory:null
 };
 
 function newVisitId(){
@@ -327,6 +327,13 @@ async function render(){
   if(state.screen==='logDetail' && state.logDetail){
     setTopbar('brand');
     const c = state.logDetail;
+    const historyOpts = [
+      {v:'', label:'Not indicated'},
+      {v:'longstanding_stated', label:'Longstanding — customer stated it'},
+      {v:'longstanding_recognized', label:'Longstanding — you/Zahid recognize it'},
+      {v:'new_stated', label:'New customer — stated'},
+      {v:'new_orientation', label:'New customer — asked orientation questions'}
+    ];
     app.innerHTML = `
       <h1 class="title">Card detail</h1>
       <p class="sub">${c['Employee']||'—'} · ${c['Outcome']||c['Status']||'—'} · ${c['Consideration Item 1']||'—'}</p>
@@ -335,6 +342,9 @@ async function render(){
       <div class="field-label">Phone</div>
       <input class="text-input" id="logPhone" value="${state.logEditPhone}">
       <p class="sub" style="margin-top:-4px;">Use this if the name or number wasn't known when the card was closed, and only came up later — e.g. at pickup or a later purchase.</p>
+      <div class="field-label" style="margin-top:10px;">Customer history — for you or Zahid to fill in, not staff</div>
+      ${historyOpts.map(o=>`<div class="option-card ${state.logEditHistory===o.v?'selected':''}" onclick="setLogHistory('${o.v}')">
+        <div class="opt-label">${o.label}</div></div>`).join('')}
       <button class="cta" onclick="saveLogEdit()">Save changes</button>
       <button class="cta ghost" onclick="state.screen='log'; render();">Back to log</button>`;
   }
@@ -390,9 +400,11 @@ function openLogDetail(i){
   state.logDetail = state.logCards[i];
   state.logEditName = state.logDetail['Contact Name'] || '';
   state.logEditPhone = state.logDetail['Contact Phone'] || '';
+  state.logEditHistory = state.logDetail['Customer History'] || '';
   state.screen='logDetail';
   render();
 }
+function setLogHistory(v){ state.logEditHistory = v; render(); }
 async function saveLogEdit(){
   state.logEditName = document.getElementById('logName').value;
   state.logEditPhone = document.getElementById('logPhone').value;
@@ -400,7 +412,8 @@ async function saveLogEdit(){
     action:'update',
     visitId: state.logDetail['Visit ID'],
     contactName: state.logEditName,
-    contactPhone: state.logEditPhone
+    contactPhone: state.logEditPhone,
+    customerHistory: state.logEditHistory
   });
   state.screen='log';
   openLog();
