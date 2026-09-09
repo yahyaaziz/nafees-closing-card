@@ -150,10 +150,6 @@ const CATEGORY_TREE = [
 // tercile analysis (Section 4) — not an invented scale. Categories absent here (Heavy Bridal
 // Set, Nose Pin, Palladium Ring) had no sales this period to derive bands from, so the weight
 // question is skipped entirely for them rather than guessed at.
-// Reliability varies — several bands below are built from under 3 pieces sold this period
-// (flagged as a weak signal in the report itself: Bracelet, Kaanta, Maala Set, Locket Set,
-// M Stone Panni Set, Stone Panni Set, Locket, Small Gani Set, Tops, Big Box Set, Baalian,
-// Diamond Ring, Gold Panni Set). Worth revisiting once more sales data exists.
 const WEIGHT_BANDS = {
   ring: [{v:'light', label:'Light', range:'1.2–3.2g'}, {v:'medium', label:'Medium', range:'3.2–4.7g'}, {v:'heavy', label:'Heavy', range:'4.8–10.4g'}],
   male_ring: [{v:'light', label:'Light', range:'3.0–3.7g'}, {v:'medium', label:'Medium', range:'3.8–5.0g'}, {v:'heavy', label:'Heavy', range:'5.7–9.0g'}],
@@ -182,21 +178,62 @@ const WEIGHT_BANDS = {
 const STAFF = [{id:'s1', name:'Yahya'}, {id:'s2', name:'Zahid'}, {id:'s3', name:'Sana'}, {id:'s4', name:'Hina'}];
 
 // EDIT ME: paste your Google Apps Script Web App URL here after deploying nafees-apps-script-backend.gs
-// (see nafees-deployment-guide.md). Until this is set, cards still save locally on-device only.
 const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbzW9v6KTiVUNwTWA__rnO4oYzcCYIpgWS5tJ2FtE0e-KlZmG3wmA-N0qWoP_c9fFELN/exec';
 
-const TOTAL_STEPS = 8;
+// Two step sequences, sharing the same first four steps. Everything downstream forks by channel.
+const PHYSICAL_STEPS = ['channel','gender','context','consideration','group','refreshment','variant','price','outcome'];
+const ONLINE_STEPS   = ['channel','gender','context','consideration','image','price','outcome'];
+function activeSteps(){ return state.channel==='online' ? ONLINE_STEPS : PHYSICAL_STEPS; }
+
+const HISTORY_OPTIONS = [
+  {v:'', label:'Not indicated'},
+  {v:'longstanding_stated', label:'Longstanding — customer stated it'},
+  {v:'longstanding_recognized', label:'Longstanding — you/Zahid recognize it'},
+  {v:'new_stated', label:'New customer — stated'},
+  {v:'new_orientation', label:'New customer — asked orientation questions'}
+];
+const PHYSICAL_OUTCOME_OPTIONS = [
+  {v:'purchased', label:'Purchased', hint:'Linked automatically from the register', color:'var(--patina)'},
+  {v:'reserved_deposit', label:'Reserved, with deposit', hint:'Existing item, partial payment, pickup later', color:'var(--brass)'},
+  {v:'custom_order', label:'Custom order placed', hint:'New piece to be made, deposit taken', color:'var(--brass-dark)'},
+  {v:'held_no_deposit', label:'Held, no deposit', hint:'Item set aside, no payment', color:'var(--neutral)'},
+  {v:'left', label:'Left', hint:'No commitment made', color:'var(--oxblood)'}
+];
+const ONLINE_OUTCOME_OPTIONS = [
+  {v:'ordered', label:'Ordered', hint:'Payment received', color:'var(--patina)'},
+  {v:'declined', label:'Declined', hint:'Did not finalize', color:'var(--oxblood)'},
+  {v:'still_deciding', label:'Still deciding — following up', hint:'Resolve later from the Card Log', color:'var(--brass)'}
+];
+const LOCATION_OPTIONS = [
+  {v:'same_city', label:'Same city'},
+  {v:'other_city_pk', label:'Other city, Pakistan'},
+  {v:'abroad', label:'Abroad'}
+];
 
 let state = {
-  screen:'staff', step:1, employee:null, visitId:null,
+  screen:'staff', stepIndex:0, employee:null, visitId:null,
   pickerLevel:'top', activeParent:null, subScreen:null,
+  channel:null,
   gender:null, competitorMentioned:false, referralMentioned:false, customerHistory:'',
   considerations:[], pendingItem:null, groupComposition:null, refreshment:null,
   variant:null, variantType:null, weightDirection:null,
+  imageHandling:null,
   price:null, pushbackReason:null, outcome:null,
-  contactShared:null, contactName:'', contactPhone:'',
-  logCards:[], logDetail:null, logEditName:'', logEditPhone:'', logEditHistory:null
+  contactShared:null, contactName:'', contactPhone:'', onlineLocation:null,
+  logCards:[], logDetail:null, logEditName:'', logEditPhone:'', logEditHistory:null, logEditOutcome:''
 };
+
+function freshCardState(){
+  return {
+    channel:null,
+    gender:null, competitorMentioned:false, referralMentioned:false, customerHistory:'',
+    considerations:[], pendingItem:null, groupComposition:null, refreshment:null,
+    variant:null, variantType:null, weightDirection:null,
+    imageHandling:null,
+    price:null, pushbackReason:null, outcome:null,
+    contactShared:null, contactName:'', contactPhone:'', onlineLocation:null
+  };
+}
 
 function newVisitId(){
   return 'v' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
@@ -221,8 +258,9 @@ function setTopbar(mode, stepIdx){
   const mid = document.getElementById('topMid');
   if(mode==='dots'){
     back.classList.add('show');
+    const total = activeSteps().length;
     let dots='';
-    for(let i=1;i<=TOTAL_STEPS;i++){ dots += `<div class="dot ${i<stepIdx?'done':(i===stepIdx?'current':'')}"></div>`; }
+    for(let i=1;i<=total;i++){ dots += `<div class="dot ${i<stepIdx?'done':(i===stepIdx?'current':'')}"></div>`; }
     mid.outerHTML = `<div class="dots" id="topMid">${dots}</div>`;
   } else {
     back.classList.remove('show');
@@ -236,17 +274,21 @@ function goBack(){
   if(state.screen!=='card') return;
   if(state.subScreen==='considerationWeight'){ state.subScreen=null; state.pendingItem=null; render(); return; }
   if(state.subScreen){ state.subScreen=null; render(); return; }
-  if(state.step===3 && state.pickerLevel==='sub'){ state.pickerLevel='top'; state.activeParent=null; render(); return; }
-  if(state.step>1){ state.step--; render(); }
+  const steps = activeSteps();
+  if(steps[state.stepIndex]==='consideration' && state.pickerLevel==='sub'){ state.pickerLevel='top'; state.activeParent=null; render(); return; }
+  if(state.stepIndex>0){ state.stepIndex--; render(); }
   else { state.screen='home'; render(); }
 }
 
+function nextStep(){
+  const steps = activeSteps();
+  if(state.stepIndex<steps.length-1){ state.stepIndex++; render(); }
+}
+
 function resetDemo(){
-  state = {screen:'staff', step:1, employee:null, visitId:null, pickerLevel:'top', activeParent:null, subScreen:null,
-    gender:null, competitorMentioned:false, referralMentioned:false,
-    considerations:[], pendingItem:null, groupComposition:null, refreshment:null, variant:null, variantType:null, weightDirection:null,
-    price:null, pushbackReason:null, outcome:null, contactShared:null, contactName:'', contactPhone:'',
-    logCards:[], logDetail:null, logEditName:'', logEditPhone:''};
+  state = {screen:'staff', stepIndex:0, employee:null, visitId:null, pickerLevel:'top', activeParent:null, subScreen:null,
+    ...freshCardState(),
+    logCards:[], logDetail:null, logEditName:'', logEditPhone:'', logEditHistory:null, logEditOutcome:''};
   render();
 }
 
@@ -283,21 +325,26 @@ async function render(){
   }
 
   if(state.screen==='card'){
-    if(state.subScreen==='considerationWeight'){ setTopbar('dots', 3); renderConsiderationWeight(app); return; }
-    if(state.subScreen==='variantType'){ setTopbar('dots', 6); renderVariantType(app); return; }
-    if(state.subScreen==='weightDirection'){ setTopbar('dots', 6); renderWeightDirection(app); return; }
-    if(state.subScreen==='pushbackReason'){ setTopbar('dots', 7); renderPushbackReason(app); return; }
-    if(state.subScreen==='contact'){ setTopbar('dots', 8); renderContact(app); return; }
-    if(state.subScreen==='contactDirect'){ setTopbar('dots', 8); renderContactDirect(app); return; }
-    setTopbar('dots', state.step);
-    if(state.step===1) renderStepGender(app);
-    if(state.step===2) renderStepContext(app);
-    if(state.step===3) renderStep1(app);
-    if(state.step===4) renderStepGroup(app);
-    if(state.step===5) renderStepRefreshment(app);
-    if(state.step===6) renderStepVariant(app);
-    if(state.step===7) renderStepPrice(app);
-    if(state.step===8) renderStepOutcome(app);
+    const steps = activeSteps();
+    if(state.subScreen==='considerationWeight'){ setTopbar('dots', steps.indexOf('consideration')+1); renderConsiderationWeight(app); return; }
+    if(state.subScreen==='variantType'){ setTopbar('dots', steps.indexOf('variant')+1); renderVariantType(app); return; }
+    if(state.subScreen==='weightDirection'){ setTopbar('dots', steps.indexOf('variant')+1); renderWeightDirection(app); return; }
+    if(state.subScreen==='pushbackReason'){ setTopbar('dots', steps.indexOf('price')+1); renderPushbackReason(app); return; }
+    if(state.subScreen==='contact'){ setTopbar('dots', steps.indexOf('outcome')+1); renderContact(app); return; }
+    if(state.subScreen==='contactDirect'){ setTopbar('dots', steps.indexOf('outcome')+1); renderContactDirect(app); return; }
+    if(state.subScreen==='onlineDetails'){ setTopbar('dots', steps.indexOf('outcome')+1); renderOnlineDetails(app); return; }
+    setTopbar('dots', state.stepIndex+1);
+    const name = steps[state.stepIndex];
+    if(name==='channel') renderStepChannel(app);
+    if(name==='gender') renderStepGender(app);
+    if(name==='context') renderStepContext(app);
+    if(name==='consideration') renderStep1(app);
+    if(name==='group') renderStepGroup(app);
+    if(name==='refreshment') renderStepRefreshment(app);
+    if(name==='variant') renderStepVariant(app);
+    if(name==='image') renderStepImage(app);
+    if(name==='price') renderStepPrice(app);
+    if(name==='outcome') renderStepOutcome(app);
   }
 
   if(state.screen==='log'){
@@ -315,7 +362,7 @@ async function render(){
         <p class="sub">Last ${state.logCards.length} — tap one to view or edit.</p>
         ${state.logCards.map((c,i)=>`
           <div class="sub-list-item" onclick="openLogDetail(${i})">
-            ${c['Employee']||'—'} · ${c['Outcome']||c['Status']||'—'}<br>
+            ${c['Channel']==='online'?'Online — ':''}${c['Employee']||'—'} · ${c['Outcome']||c['Status']||'—'}<br>
             <span style="font-weight:400; font-size:12px; color:#8A8073;">
               ${c['Consideration Item 1']||''} ${c['Contact Name']?(' · '+c['Contact Name']):''}
             </span>
@@ -327,17 +374,21 @@ async function render(){
   if(state.screen==='logDetail' && state.logDetail){
     setTopbar('brand');
     const c = state.logDetail;
-    const historyOpts = HISTORY_OPTIONS;
+    const channel = c['Channel'] || 'physical';
+    const outcomeOpts = channel==='online' ? ONLINE_OUTCOME_OPTIONS : PHYSICAL_OUTCOME_OPTIONS;
     app.innerHTML = `
       <h1 class="title">Card detail</h1>
-      <p class="sub">${c['Employee']||'—'} · ${c['Outcome']||c['Status']||'—'} · ${c['Consideration Item 1']||'—'}</p>
+      <p class="sub">${channel==='online'?'Online — ':''}${c['Employee']||'—'} · ${c['Outcome']||c['Status']||'—'} · ${c['Consideration Item 1']||'—'}</p>
       <div class="field-label">Name</div>
-      <input class="text-input" id="logName" value="${state.logEditName}">
+      <input class="text-input" id="logName" value="${state.logEditName}" oninput="state.logEditName=this.value">
       <div class="field-label">Phone</div>
-      <input class="text-input" id="logPhone" value="${state.logEditPhone}">
+      <input class="text-input" id="logPhone" value="${state.logEditPhone}" oninput="state.logEditPhone=this.value">
       <p class="sub" style="margin-top:-4px;">Use this if the name or number wasn't known when the card was closed, and only came up later — e.g. at pickup or a later purchase.</p>
       <div class="field-label" style="margin-top:10px;">Customer history — for you or Zahid to fill in, not staff</div>
-      ${historyOpts.map(o=>`<div class="option-card ${state.logEditHistory===o.v?'selected':''}" onclick="setLogHistory('${o.v}')">
+      ${HISTORY_OPTIONS.map(o=>`<div class="option-card ${state.logEditHistory===o.v?'selected':''}" onclick="setLogHistory('${o.v}')">
+        <div class="opt-label">${o.label}</div></div>`).join('')}
+      <div class="field-label" style="margin-top:10px;">Outcome — update if it's since resolved</div>
+      ${outcomeOpts.map(o=>`<div class="option-card ${state.logEditOutcome===o.v?'selected':''}" onclick="setLogOutcome('${o.v}')">
         <div class="opt-label">${o.label}</div></div>`).join('')}
       <button class="cta" onclick="saveLogEdit()">Save changes</button>
       <button class="cta ghost" onclick="state.screen='log'; render();">Back to log</button>`;
@@ -355,12 +406,8 @@ async function render(){
         ${(!BACKEND_URL || BACKEND_URL.indexOf('PASTE_YOUR')===0) ? '<div class="confirm-sub" style="margin-top:14px; opacity:.7;">Local-only mode — backend not yet connected</div>' : ''}
       </div>`;
     setTimeout(()=>{
-      state.screen='home'; state.step=1; state.visitId=null; state.pickerLevel='top'; state.activeParent=null; state.subScreen=null;
-      state.gender=null; state.competitorMentioned=false; state.referralMentioned=false; state.customerHistory='';
-      state.considerations=[]; state.pendingItem=null; state.groupComposition=null; state.refreshment=null;
-      state.variant=null; state.variantType=null; state.weightDirection=null;
-      state.price=null; state.pushbackReason=null; state.outcome=null;
-      state.contactShared=null; state.contactName=''; state.contactPhone='';
+      state.screen='home'; state.stepIndex=0; state.visitId=null; state.pickerLevel='top'; state.activeParent=null; state.subScreen=null;
+      Object.assign(state, freshCardState());
       render();
     }, 1900);
   }
@@ -368,12 +415,8 @@ async function render(){
 
 function selectStaff(id,name){ state.employee = name; state.screen='home'; render(); }
 function startCard(){
-  state.screen='card'; state.step=1; state.visitId=newVisitId(); state.pickerLevel='top'; state.activeParent=null; state.subScreen=null;
-  state.gender=null; state.competitorMentioned=false; state.referralMentioned=false; state.customerHistory='';
-  state.considerations=[]; state.pendingItem=null; state.groupComposition=null; state.refreshment=null;
-  state.variant=null; state.variantType=null; state.weightDirection=null;
-  state.price=null; state.pushbackReason=null; state.outcome=null;
-  state.contactShared=null; state.contactName=''; state.contactPhone='';
+  state.screen='card'; state.stepIndex=0; state.visitId=newVisitId(); state.pickerLevel='top'; state.activeParent=null; state.subScreen=null;
+  Object.assign(state, freshCardState());
   render();
   // fires the instant a card is opened — this is what guarantees a visit is counted
   // even if the card is abandoned partway through.
@@ -395,55 +438,62 @@ function openLogDetail(i){
   state.logEditName = state.logDetail['Contact Name'] || '';
   state.logEditPhone = state.logDetail['Contact Phone'] || '';
   state.logEditHistory = state.logDetail['Customer History'] || '';
+  state.logEditOutcome = state.logDetail['Outcome'] || '';
   state.screen='logDetail';
   render();
 }
 function setLogHistory(v){ state.logEditHistory = v; render(); }
+function setLogOutcome(v){ state.logEditOutcome = v; render(); }
 async function saveLogEdit(){
-  state.logEditName = document.getElementById('logName').value;
-  state.logEditPhone = document.getElementById('logPhone').value;
   await sendToBackend({
     action:'update',
     visitId: state.logDetail['Visit ID'],
     contactName: state.logEditName,
     contactPhone: state.logEditPhone,
-    customerHistory: state.logEditHistory
+    customerHistory: state.logEditHistory,
+    outcome: state.logEditOutcome
   });
   state.screen='log';
   openLog();
 }
 
-/* ---- Step 1: gender of the primary customer ---- */
+/* ---- channel ---- */
+function renderStepChannel(app){
+  app.innerHTML = `
+    <h1 class="title">Physical visit or<br>online order?</h1>
+    <p class="sub">One tap.</p>
+    <div class="option-card" onclick="selectChannel('physical')">
+      <div class="opt-label">Physical visit</div><div class="opt-hint">Customer came to the showroom</div></div>
+    <div class="option-card" onclick="selectChannel('online')">
+      <div class="opt-label">Online order</div><div class="opt-hint">Call, WhatsApp, or social media inquiry</div></div>`;
+}
+function selectChannel(v){ state.channel=v; nextStep(); }
+
+/* ---- gender ---- */
 function renderStepGender(app){
   const opts = [
     {v:'female', label:'Female', hint:''},
     {v:'male', label:'Male', hint:''},
     {v:'joint_unclear', label:'Joint / unclear', hint:'No single primary customer — e.g. a couple shopping together with equal initiative'}
   ];
+  const title = state.channel==='online' ? "Who are you<br>communicating with?" : "Who was the<br>primary customer?";
+  const sub = state.channel==='online' ? "Whoever you\u2019re actually talking to \u2014 not necessarily who the piece is for." : "The person the inquiry was for \u2014 one tap.";
   app.innerHTML = `
-    <h1 class="title">Who was the<br>primary customer?</h1>
-    <p class="sub">The person the inquiry was for — one tap.</p>
+    <h1 class="title">${title}</h1>
+    <p class="sub">${sub}</p>
     ${opts.map(o=>`<div class="option-card ${state.gender===o.v?'selected':''}" onclick="selectGender('${o.v}')">
       <div class="opt-label">${o.label}</div>${o.hint?`<div class="opt-hint">${o.hint}</div>`:''}</div>`).join('')}
     <div class="footer-note">Selecting an option moves to the next step</div>`;
 }
 function selectGender(v){ state.gender=v; setTimeout(nextStep, 180); renderStepGender(document.getElementById('app')); }
 
-/* ---- Step 2: context flags (competitor / referral) ---- */
-const HISTORY_OPTIONS = [
-  {v:'', label:'Not indicated'},
-  {v:'longstanding_stated', label:'Longstanding — customer stated it'},
-  {v:'longstanding_recognized', label:'Longstanding — you/Zahid recognize it'},
-  {v:'new_stated', label:'New customer — stated'},
-  {v:'new_orientation', label:'New customer — asked orientation questions'}
-];
-
+/* ---- context flags ---- */
 function renderStepContext(app){
   app.innerHTML = `
     <h1 class="title">Anything else<br>worth flagging?</h1>
     <p class="sub">Only if mentioned — tap any that apply, or just continue.</p>
     <div class="option-card ${state.competitorMentioned?'selected':''}" onclick="toggleContext('competitorMentioned')">
-      <div class="opt-label">Mentioned a competitor</div><div class="opt-hint">Referenced another shop or brand</div>
+      <div class="opt-label">Mentioned a competitor</div><div class="opt-hint">Customer said so, verbally — not a guess from an image</div>
     </div>
     <div class="option-card ${state.referralMentioned?'selected':''}" onclick="toggleContext('referralMentioned')">
       <div class="opt-label">Mentioned being referred</div><div class="opt-hint">Came in on someone else's recommendation</div>
@@ -456,7 +506,7 @@ function renderStepContext(app){
 function toggleContext(field){ state[field] = !state[field]; renderStepContext(document.getElementById('app')); }
 function setCardHistory(v){ state.customerHistory = v; renderStepContext(document.getElementById('app')); }
 
-/* ---- Step 3: consideration set ---- */
+/* ---- consideration set ---- */
 function renderStep1(app){
   const chips = state.considerations.map((c,i)=>`
     <div class="chip"><span>${c.label}${c.weightBand?' — '+c.weightBand:''}</span><button onclick="removeConsideration(${i})">&#10005;</button></div>`).join('');
@@ -520,7 +570,7 @@ function selectConsiderationWeight(bandLabel){
 }
 function removeConsideration(i){ state.considerations.splice(i,1); render(); }
 
-/* ---- Step 2: group composition ---- */
+/* ---- group composition (physical only) ---- */
 function renderStepGroup(app){
   const opts = [
     {v:'alone', label:'Alone', hint:'No companion present'},
@@ -537,7 +587,7 @@ function renderStepGroup(app){
 }
 function selectGroup(v){ state.groupComposition=v; setTimeout(nextStep, 180); renderStepGroup(document.getElementById('app')); }
 
-/* ---- Step 3: refreshment ---- */
+/* ---- refreshment (physical only) ---- */
 function renderStepRefreshment(app){
   const opts = [
     {v:'not_offered', label:'Not offered', hint:'Refreshment wasn\u2019t offered this visit'},
@@ -555,7 +605,7 @@ function renderStepRefreshment(app){
 }
 function selectRefreshment(v){ state.refreshment=v; setTimeout(nextStep, 180); renderStepRefreshment(document.getElementById('app')); }
 
-/* ---- Step 4: variant (+ conditional type) ---- */
+/* ---- variant, physical only (+ conditional type / weight direction) ---- */
 function renderStepVariant(app){
   const opts = [
     {v:'none', label:'No variant issue', hint:'Customer was satisfied with what was shown'},
@@ -589,7 +639,7 @@ function renderVariantType(app){
       <div class="opt-label">${o.label}</div>${o.hint?`<div class="opt-hint">${o.hint}</div>`:''}</div>`).join('')}`;
 }
 function selectVariantType(v){
-  state.variantType=v; 
+  state.variantType=v;
   if(v==='weight'){ state.subScreen='weightDirection'; render(); }
   else { state.subScreen=null; setTimeout(nextStep, 150); render(); }
 }
@@ -610,7 +660,24 @@ function selectWeightDirection(v){
   render();
 }
 
-/* ---- Step 5: price ---- */
+/* ---- image handling, online only ---- */
+function renderStepImage(app){
+  const opts = [
+    {v:'customer_image', label:'Customer sent their own reference image', hint:''},
+    {v:'we_sent_options', label:'We sent options, they picked', hint:''},
+    {v:'image_with_changes', label:'Reference image, with changes requested', hint:'e.g. same design, different weight or stone'},
+    {v:'fully_custom', label:'Fully custom — described only, no image', hint:''}
+  ];
+  app.innerHTML = `
+    <h1 class="title">How was the<br>design settled?</h1>
+    <p class="sub">One tap.</p>
+    ${opts.map(o=>`<div class="option-card ${state.imageHandling===o.v?'selected':''}" onclick="selectImageHandling('${o.v}')">
+      <div class="opt-label">${o.label}</div>${o.hint?`<div class="opt-hint">${o.hint}</div>`:''}</div>`).join('')}
+    <div class="footer-note">Selecting an option moves to the next step</div>`;
+}
+function selectImageHandling(v){ state.imageHandling=v; setTimeout(nextStep, 180); renderStepImage(document.getElementById('app')); }
+
+/* ---- price, shared (+ conditional pushback reason) ---- */
 function renderStepPrice(app){
   const opts = [
     {v:'not_discussed', label:'Not discussed', hint:'Price didn\u2019t come up'},
@@ -649,15 +716,9 @@ function selectPushbackReason(v){
   render();
 }
 
-/* ---- Step 6: outcome (+ conditional contact capture) ---- */
+/* ---- outcome, branches by channel (+ conditional contact capture) ---- */
 function renderStepOutcome(app){
-  const opts = [
-    {v:'purchased', label:'Purchased', hint:'Linked automatically from the register', color:'var(--patina)'},
-    {v:'reserved_deposit', label:'Reserved, with deposit', hint:'Existing item, partial payment, pickup later', color:'var(--brass)'},
-    {v:'custom_order', label:'Custom order placed', hint:'New piece to be made, deposit taken', color:'var(--brass-dark)'},
-    {v:'held_no_deposit', label:'Held, no deposit', hint:'Item set aside, no payment', color:'var(--neutral)'},
-    {v:'left', label:'Left', hint:'No commitment made', color:'var(--oxblood)'}
-  ];
+  const opts = state.channel==='online' ? ONLINE_OUTCOME_OPTIONS : PHYSICAL_OUTCOME_OPTIONS;
   app.innerHTML = `
     <h1 class="title">How did it end?</h1>
     <p class="sub">One tap.</p>
@@ -667,8 +728,27 @@ function renderStepOutcome(app){
 }
 function handleOutcome(v){
   state.outcome = v;
+  if(state.channel==='online'){ state.subScreen='onlineDetails'; render(); return; }
   if(v==='left'){ state.subScreen='contact'; render(); }
   else { state.subScreen='contactDirect'; render(); }
+}
+function renderOnlineDetails(app){
+  app.innerHTML = `
+    <h1 class="title">Location &amp;<br>contact</h1>
+    <p class="sub">Already known from the transfer — just recording it here too.</p>
+    <div class="field-label">Location</div>
+    ${LOCATION_OPTIONS.map(o=>`<div class="option-card ${state.onlineLocation===o.v?'selected':''}" onclick="setOnlineLocation('${o.v}')">
+      <div class="opt-label">${o.label}</div></div>`).join('')}
+    <div class="field-label" style="margin-top:10px;">Name</div>
+    <input class="text-input" id="onlineName" placeholder="e.g. Fatima Khan" value="${state.contactName}" oninput="state.contactName=this.value">
+    <div class="field-label">Phone</div>
+    <input class="text-input" id="onlinePhone" placeholder="03xx-xxxxxxx" value="${state.contactPhone}" oninput="state.contactPhone=this.value">
+    <button class="cta" onclick="saveOnlineDetailsAndFinish()">Save</button>`;
+}
+function setOnlineLocation(v){ state.onlineLocation=v; render(); }
+function saveOnlineDetailsAndFinish(){
+  state.contactShared = true;
+  finishCard();
 }
 function renderContactDirect(app){
   const labels = {
@@ -681,15 +761,13 @@ function renderContactDirect(app){
     <h1 class="title">Customer name<br>&amp; number</h1>
     <p class="sub">Whatever was already taken ${labels[state.outcome]||''} — enter it here too, so this record can be matched against it later.</p>
     <div class="field-label">Name</div>
-    <input class="text-input" id="cNameD" placeholder="e.g. Fatima Khan" value="${state.contactName}">
+    <input class="text-input" id="cNameD" placeholder="e.g. Fatima Khan" value="${state.contactName}" oninput="state.contactName=this.value">
     <div class="field-label">Phone (most reliable for matching)</div>
-    <input class="text-input" id="cPhoneD" placeholder="03xx-xxxxxxx" value="${state.contactPhone}">
+    <input class="text-input" id="cPhoneD" placeholder="03xx-xxxxxxx" value="${state.contactPhone}" oninput="state.contactPhone=this.value">
     <button class="cta" onclick="saveDirectContactAndFinish()">Save</button>
   `;
 }
 function saveDirectContactAndFinish(){
-  state.contactName = document.getElementById('cNameD').value;
-  state.contactPhone = document.getElementById('cPhoneD').value;
   state.contactShared = true;
   finishCard();
 }
@@ -703,27 +781,21 @@ function renderContact(app){
     </div>
     ${state.contactShared===true ? `
       <div class="field-label">Name (optional)</div>
-      <input class="text-input" id="cName" placeholder="e.g. Fatima Khan" value="${state.contactName}">
+      <input class="text-input" id="cName" placeholder="e.g. Fatima Khan" value="${state.contactName}" oninput="state.contactName=this.value">
       <div class="field-label">Phone (optional)</div>
-      <input class="text-input" id="cPhone" placeholder="03xx-xxxxxxx" value="${state.contactPhone}">
-      <button class="cta" onclick="saveContactAndFinish()">Save</button>
+      <input class="text-input" id="cPhone" placeholder="03xx-xxxxxxx" value="${state.contactPhone}" oninput="state.contactPhone=this.value">
+      <button class="cta" onclick="finishCard()">Save</button>
     ` : (state.contactShared===false ? `<button class="cta" onclick="finishCard()">Continue</button>` : '')}
   `;
 }
 function setContactShared(v){ state.contactShared=v; render(); }
-function saveContactAndFinish(){
-  state.contactName = document.getElementById('cName').value;
-  state.contactPhone = document.getElementById('cPhone').value;
-  finishCard();
-}
-
-function nextStep(){ if(state.step<TOTAL_STEPS){ state.step++; render(); } }
 
 function buildPayload(){
   return {
     action: 'complete',
     visitId: state.visitId,
     employee: state.employee,
+    channel: state.channel || 'physical',
     gender: state.gender,
     competitorMentioned: state.competitorMentioned,
     referralMentioned: state.referralMentioned,
@@ -733,12 +805,14 @@ function buildPayload(){
     variant: state.variant,
     variantType: state.variantType,
     weightDirection: state.weightDirection,
+    imageHandling: state.imageHandling,
     price: state.price,
     pushbackReason: state.pushbackReason,
     outcome: state.outcome,
     contactShared: state.contactShared,
     contactName: state.contactName,
     contactPhone: state.contactPhone,
+    onlineLocation: state.onlineLocation,
     customerHistory: state.customerHistory,
     clientTimestamp: new Date().toISOString()
   };
@@ -764,10 +838,9 @@ async function sendToBackend(payload){
   }
 }
 
-// Diagnostic only — call from the browser console (testBackendConnection()) or the
-// "Test connection" link on the staff screen. Sends a harmless start-ping and reports
-// plainly whether the request itself failed (network/file:// issue) — it can't confirm
-// the write succeeded, since 'no-cors' hides the response, so always check the sheet too.
+// Diagnostic only. Sends a harmless start-ping via POST and GET and reports plainly
+// whether each was sent without a JS-level error — it can't confirm the write actually
+// landed, since 'no-cors' hides the response, so always check the sheet too.
 async function testBackendConnection(){
   if(!BACKEND_URL || BACKEND_URL.indexOf('PASTE_YOUR')===0){
     alert('BACKEND_URL is still the placeholder — paste your Apps Script Web App URL in first.');
@@ -793,8 +866,7 @@ async function testBackendConnection(){
   alert(
     'POST attempt: ' + (postOk ? 'sent without error' : ('failed — ' + postErr)) + '\n' +
     'GET attempt: ' + (getOk ? 'sent without error' : ('failed — ' + getErr)) + '\n\n' +
-    'Now check the ClosingCards sheet for rows named "Connection Test (POST)" and "Connection Test (GET)". ' +
-    'Whichever one(s) actually appear tells us which request method is getting through.'
+    'Now check the ClosingCards sheet for rows named "Connection Test (POST)" and "Connection Test (GET)".'
   );
 }
 
