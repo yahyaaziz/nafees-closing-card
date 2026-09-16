@@ -181,8 +181,8 @@ const STAFF = [{id:'s1', name:'Yahya'}, {id:'s2', name:'Zahid'}, {id:'s3', name:
 const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbzW9v6KTiVUNwTWA__rnO4oYzcCYIpgWS5tJ2FtE0e-KlZmG3wmA-N0qWoP_c9fFELN/exec';
 
 // Two step sequences, sharing the same first four steps. Everything downstream forks by channel.
-const PHYSICAL_STEPS = ['channel','gender','context','consideration','group','refreshment','variant','price','outcome'];
-const ONLINE_STEPS   = ['channel','gender','context','consideration','image','price','outcome'];
+const PHYSICAL_STEPS = ['timestamp','channel','gender','context','consideration','group','refreshment','variant','price','outcome'];
+const ONLINE_STEPS   = ['timestamp','channel','gender','context','consideration','image','price','outcome'];
 function activeSteps(){ return state.channel==='online' ? ONLINE_STEPS : PHYSICAL_STEPS; }
 
 const HISTORY_OPTIONS = [
@@ -213,6 +213,7 @@ const LOCATION_OPTIONS = [
 let state = {
   screen:'staff', stepIndex:0, employee:null, visitId:null,
   pickerLevel:'top', activeParent:null, subScreen:null,
+  visitTimestamp:'',
   channel:null,
   gender:null, competitorMentioned:false, referralMentioned:false, customerHistory:'',
   considerations:[], pendingItem:null, groupComposition:null, refreshment:null,
@@ -223,8 +224,16 @@ let state = {
   logCards:[], logDetail:null, logEditName:'', logEditPhone:'', logEditHistory:null, logEditOutcome:''
 };
 
+// Formats "now" (or any Date) into the local yyyy-MM-ddThh:mm format an
+// <input type="datetime-local"> expects — not UTC, so it matches the clock on the phone.
+function toLocalDatetimeInput(d){
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function freshCardState(){
   return {
+    visitTimestamp: toLocalDatetimeInput(new Date()),
     channel:null,
     gender:null, competitorMentioned:false, referralMentioned:false, customerHistory:'',
     considerations:[], pendingItem:null, groupComposition:null, refreshment:null,
@@ -335,6 +344,7 @@ async function render(){
     if(state.subScreen==='onlineDetails'){ setTopbar('dots', steps.indexOf('outcome')+1); renderOnlineDetails(app); return; }
     setTopbar('dots', state.stepIndex+1);
     const name = steps[state.stepIndex];
+    if(name==='timestamp') renderStepTimestamp(app);
     if(name==='channel') renderStepChannel(app);
     if(name==='gender') renderStepGender(app);
     if(name==='context') renderStepContext(app);
@@ -455,6 +465,16 @@ async function saveLogEdit(){
   });
   state.screen='log';
   openLog();
+}
+
+/* ---- timestamp — when this actually happened, defaults to now ---- */
+function renderStepTimestamp(app){
+  app.innerHTML = `
+    <h1 class="title">When did this<br>happen?</h1>
+    <p class="sub">Defaults to right now — only change it if you're logging this later.</p>
+    <input class="text-input" type="datetime-local" id="visitTimestampInput"
+      value="${state.visitTimestamp}" oninput="state.visitTimestamp=this.value">
+    <button class="cta" onclick="nextStep()">Continue</button>`;
 }
 
 /* ---- channel ---- */
@@ -795,6 +815,7 @@ function buildPayload(){
     action: 'complete',
     visitId: state.visitId,
     employee: state.employee,
+    visitTimestamp: state.visitTimestamp,
     channel: state.channel || 'physical',
     gender: state.gender,
     competitorMentioned: state.competitorMentioned,
