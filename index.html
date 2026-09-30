@@ -182,8 +182,8 @@ const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbzW9v6KTiVUNwTWA__r
 
 // Two step sequences, sharing the same first four steps. Everything downstream forks by channel.
 const PHYSICAL_STEPS = ['timestamp','channel','gender','context','consideration','group','refreshment','variant','price','outcome'];
-const ONLINE_STEPS   = ['timestamp','channel','gender','context','consideration','image','price','outcome'];
-function activeSteps(){ return state.channel==='online' ? ONLINE_STEPS : PHYSICAL_STEPS; }
+const ONLINE_STEPS   = ['timestamp','channel','gender','context','consideration','image','origin','price','outcome'];
+function activeSteps(){ return state.channel!=='physical' ? ONLINE_STEPS : PHYSICAL_STEPS; }
 
 const HISTORY_OPTIONS = [
   {v:'', label:'Not indicated'},
@@ -218,7 +218,7 @@ let state = {
   gender:null, competitorMentioned:false, referralMentioned:false, customerHistory:'',
   considerations:[], pendingItem:null, groupComposition:null, refreshment:null,
   variant:null, variantType:null, weightDirection:null,
-  imageHandling:null,
+  imageHandling:null, designOrigin:null,
   price:null, pushbackReason:null, outcome:null,
   contactShared:null, contactName:'', contactPhone:'', onlineLocation:null,
   logCards:[], logDetail:null, logEditName:'', logEditPhone:'', logEditHistory:null, logEditOutcome:''
@@ -238,7 +238,7 @@ function freshCardState(){
     gender:null, competitorMentioned:false, referralMentioned:false, customerHistory:'',
     considerations:[], pendingItem:null, groupComposition:null, refreshment:null,
     variant:null, variantType:null, weightDirection:null,
-    imageHandling:null,
+    imageHandling:null, designOrigin:null,
     price:null, pushbackReason:null, outcome:null,
     contactShared:null, contactName:'', contactPhone:'', onlineLocation:null
   };
@@ -353,6 +353,7 @@ async function render(){
     if(name==='refreshment') renderStepRefreshment(app);
     if(name==='variant') renderStepVariant(app);
     if(name==='image') renderStepImage(app);
+    if(name==='origin') renderStepOrigin(app);
     if(name==='price') renderStepPrice(app);
     if(name==='outcome') renderStepOutcome(app);
   }
@@ -372,7 +373,7 @@ async function render(){
         <p class="sub">Last ${state.logCards.length} — tap one to view or edit.</p>
         ${state.logCards.map((c,i)=>`
           <div class="sub-list-item" onclick="openLogDetail(${i})">
-            ${c['Channel']==='online'?'Online — ':''}${c['Employee']||'—'} · ${c['Outcome']||c['Status']||'—'}<br>
+            ${(c['Channel']||'physical')!=='physical'?'Online — ':''}${c['Employee']||'—'} · ${c['Outcome']||c['Status']||'—'}<br>
             <span style="font-weight:400; font-size:12px; color:#8A8073;">
               ${c['Consideration Item 1']||''} ${c['Contact Name']?(' · '+c['Contact Name']):''}
             </span>
@@ -385,10 +386,10 @@ async function render(){
     setTopbar('brand');
     const c = state.logDetail;
     const channel = c['Channel'] || 'physical';
-    const outcomeOpts = channel==='online' ? ONLINE_OUTCOME_OPTIONS : PHYSICAL_OUTCOME_OPTIONS;
+    const outcomeOpts = channel!=='physical' ? ONLINE_OUTCOME_OPTIONS : PHYSICAL_OUTCOME_OPTIONS;
     app.innerHTML = `
       <h1 class="title">Card detail</h1>
-      <p class="sub">${channel==='online'?'Online — ':''}${c['Employee']||'—'} · ${c['Outcome']||c['Status']||'—'} · ${c['Consideration Item 1']||'—'}</p>
+      <p class="sub">${channel!=='physical'?'Online — ':''}${c['Employee']||'—'} · ${c['Outcome']||c['Status']||'—'} · ${c['Consideration Item 1']||'—'}</p>
       <div class="field-label">Name</div>
       <input class="text-input" id="logName" value="${state.logEditName}" oninput="state.logEditName=this.value">
       <div class="field-label">Phone</div>
@@ -478,14 +479,21 @@ function renderStepTimestamp(app){
 }
 
 /* ---- channel ---- */
+const CHANNEL_OPTIONS = [
+  {v:'physical', label:'Physical visit', hint:'Customer came to the showroom'},
+  {v:'instagram', label:'Instagram', hint:''},
+  {v:'whatsapp', label:'WhatsApp', hint:''},
+  {v:'tiktok', label:'TikTok', hint:''},
+  {v:'facebook', label:'Facebook', hint:''},
+  {v:'phone', label:'Phone call', hint:''},
+  {v:'other_online', label:'Other online', hint:''}
+];
 function renderStepChannel(app){
   app.innerHTML = `
-    <h1 class="title">Physical visit or<br>online order?</h1>
+    <h1 class="title">How did this<br>happen?</h1>
     <p class="sub">One tap.</p>
-    <div class="option-card" onclick="selectChannel('physical')">
-      <div class="opt-label">Physical visit</div><div class="opt-hint">Customer came to the showroom</div></div>
-    <div class="option-card" onclick="selectChannel('online')">
-      <div class="opt-label">Online order</div><div class="opt-hint">Call, WhatsApp, or social media inquiry</div></div>`;
+    ${CHANNEL_OPTIONS.map(o=>`<div class="option-card" onclick="selectChannel('${o.v}')">
+      <div class="opt-label">${o.label}</div>${o.hint?`<div class="opt-hint">${o.hint}</div>`:''}</div>`).join('')}`;
 }
 function selectChannel(v){ state.channel=v; nextStep(); }
 
@@ -496,8 +504,8 @@ function renderStepGender(app){
     {v:'male', label:'Male', hint:''},
     {v:'joint_unclear', label:'Joint / unclear', hint:'No single primary customer — e.g. a couple shopping together with equal initiative'}
   ];
-  const title = state.channel==='online' ? "Who are you<br>communicating with?" : "Who was the<br>primary customer?";
-  const sub = state.channel==='online' ? "Whoever you\u2019re actually talking to \u2014 not necessarily who the piece is for." : "The person the inquiry was for \u2014 one tap.";
+  const title = state.channel!=='physical' ? "Who are you<br>communicating with?" : "Who was the<br>primary customer?";
+  const sub = state.channel!=='physical' ? "Whoever you\u2019re actually talking to \u2014 not necessarily who the piece is for." : "The person the inquiry was for \u2014 one tap.";
   app.innerHTML = `
     <h1 class="title">${title}</h1>
     <p class="sub">${sub}</p>
@@ -697,6 +705,24 @@ function renderStepImage(app){
 }
 function selectImageHandling(v){ state.imageHandling=v; setTimeout(nextStep, 180); renderStepImage(document.getElementById('app')); }
 
+/* ---- design origin, online only — where the reference/idea came from, distinct from imageHandling ---- */
+const DESIGN_ORIGIN_OPTIONS = [
+  {v:'nafees_content', label:"Nafees's own content", hint:'Website, Instagram, TikTok, Facebook, or a past purchase'},
+  {v:'other_jeweller', label:'Another jeweller', hint:''},
+  {v:'external_platform', label:'Pinterest or another platform', hint:'Not Nafees\u2019s own'},
+  {v:'customer_jewellery', label:"Customer's own jewellery", hint:''},
+  {v:'custom_no_reference', label:'Fully custom idea', hint:'No specific reference'}
+];
+function renderStepOrigin(app){
+  app.innerHTML = `
+    <h1 class="title">Where did the design<br>or reference come from?</h1>
+    <p class="sub">One tap.</p>
+    ${DESIGN_ORIGIN_OPTIONS.map(o=>`<div class="option-card ${state.designOrigin===o.v?'selected':''}" onclick="selectDesignOrigin('${o.v}')">
+      <div class="opt-label">${o.label}</div>${o.hint?`<div class="opt-hint">${o.hint}</div>`:''}</div>`).join('')}
+    <div class="footer-note">Selecting an option moves to the next step</div>`;
+}
+function selectDesignOrigin(v){ state.designOrigin=v; setTimeout(nextStep, 180); renderStepOrigin(document.getElementById('app')); }
+
 /* ---- price, shared (+ conditional pushback reason) ---- */
 function renderStepPrice(app){
   const opts = [
@@ -738,7 +764,7 @@ function selectPushbackReason(v){
 
 /* ---- outcome, branches by channel (+ conditional contact capture) ---- */
 function renderStepOutcome(app){
-  const opts = state.channel==='online' ? ONLINE_OUTCOME_OPTIONS : PHYSICAL_OUTCOME_OPTIONS;
+  const opts = state.channel!=='physical' ? ONLINE_OUTCOME_OPTIONS : PHYSICAL_OUTCOME_OPTIONS;
   app.innerHTML = `
     <h1 class="title">How did it end?</h1>
     <p class="sub">One tap.</p>
@@ -748,7 +774,7 @@ function renderStepOutcome(app){
 }
 function handleOutcome(v){
   state.outcome = v;
-  if(state.channel==='online'){ state.subScreen='onlineDetails'; render(); return; }
+  if(state.channel!=='physical'){ state.subScreen='onlineDetails'; render(); return; }
   if(v==='left'){ state.subScreen='contact'; render(); }
   else { state.subScreen='contactDirect'; render(); }
 }
@@ -827,6 +853,7 @@ function buildPayload(){
     variantType: state.variantType,
     weightDirection: state.weightDirection,
     imageHandling: state.imageHandling,
+    designOrigin: state.designOrigin,
     price: state.price,
     pushbackReason: state.pushbackReason,
     outcome: state.outcome,
